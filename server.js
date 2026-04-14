@@ -6,18 +6,22 @@ const FormData = require("form-data");
 const cors = require("cors");
 
 const app = express();
+
 app.use(cors());
+app.options("*", cors());
 app.use(express.raw({ limit: "100mb", type: "*/*" }));
 
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const CHAT_ID = process.env.CHAT_ID;
-const FIREBASE_URL = process.env.FIREBASE_URL; // 🔥 only URL
+
+// 📦 Memory storage (video list)
+let videos = [];
 
 // 📦 Upload chunk
 app.post("/upload-chunk", (req, res) => {
   try {
-    const fileName = req.headers.filename;
-    const index = req.headers.index;
+    const fileName = req.query.filename;
+    const index = req.query.index;
 
     const dir = path.join(__dirname, "uploads", fileName);
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
@@ -27,11 +31,12 @@ app.post("/upload-chunk", (req, res) => {
     res.send({ status: "chunk ok" });
 
   } catch (err) {
+    console.log(err);
     res.status(500).send("chunk error");
   }
 });
 
-// 🔗 Merge + Upload + Save + Delete
+// 🔗 Merge + Telegram + Save
 app.post("/merge", async (req, res) => {
   const { filename, totalChunks } = req.query;
 
@@ -41,44 +46,49 @@ app.post("/merge", async (req, res) => {
   const writeStream = fs.createWriteStream(finalPath);
 
   for (let i = 0; i < totalChunks; i++) {
-    const chunk = fs.readFileSync(path.join(uploadDir, i.toString()));
-    writeStream.write(chunk);
+    const chunkPath = path.join(uploadDir, i.toString());
+
+    if (!fs.existsSync(chunkPath)) {
+      console.log("Missing chunk:", i);
+      continue;
+    }
+
+    writeStream.write(fs.readFileSync(chunkPath));
   }
 
   writeStream.end();
 
   writeStream.on("finish", async () => {
-    let fileId = null;
-
     try {
-      // 📤 Telegram upload
+      console.log("Uploading to Telegram...");
+
       const form = new FormData();
       form.append("chat_id", CHAT_ID);
-      form.append("video", fs.createReadStream(finalPath));
+      form.append("document", fs.createReadStream(finalPath));
 
       const tg = await axios.post(
-        `https://api.telegram.org/bot${BOT_TOKEN}/sendVideo`,
+        `https://api.telegram.org/bot${BOT_TOKEN}/sendDocument`,
         form,
         { headers: form.getHeaders() }
       );
 
-      fileId = tg.data.result.video.file_id;
+      const fileId = tg.data.result.document.file_id;
 
-      // 🔥 Firebase save via URL
-      await axios.post(`${FIREBASE_URL}/videos.json`, {
-        file_id: fileId,
+      // 🔥 Save in memory
+      videos.push({
         name: filename,
+        file_id: fileId,
         time: Date.now()
       });
 
-      res.send({ status: "success", file_id: fileId });
+      res.send({ status: "success" });
 
     } catch (err) {
-      console.log("Upload fail", err.message);
-      res.send({ status: "failed but cleaned" });
+      console.log("Telegram error:", err.response?.data || err.message);
+      res.send({ status: "failed" });
 
     } finally {
-      // 🧹 ALWAYS DELETE
+      // 🧹 delete files
       try {
         if (fs.existsSync(finalPath)) fs.unlinkSync(finalPath);
         if (fs.existsSync(uploadDir)) {
@@ -87,6 +97,16 @@ app.post("/merge", async (req, res) => {
       } catch {}
     }
   });
+});
+
+// 📺 Get videos list
+app.get("/videos", (req, res) => {
+  res.json(videos);
+});
+
+// 🏠 Root
+app.get("/", (req, res) => {
+  res.send("Server running 🚀");
 });
 
 app.listen(3000, () => console.log("Server running 🚀"));
