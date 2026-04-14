@@ -11,10 +11,10 @@ const app = express();
 app.use(cors());
 app.options("*", cors());
 
-// ✅ RAW parser (important)
+// 🔥 ONLY octet-stream (important fix)
 app.use(express.raw({
   limit: "200mb",
-  type: "*/*"
+  type: "application/octet-stream"
 }));
 
 const BOT_TOKEN = process.env.BOT_TOKEN;
@@ -30,23 +30,14 @@ app.post("/upload-chunk", (req, res) => {
       return res.status(400).json({ error: "Missing params" });
     }
 
-    // 🔥 safe filename
+    // safe filename
     fileName = fileName.replace(/[^a-zA-Z0-9.]/g, "_");
 
     const dir = path.join(__dirname, "uploads", fileName);
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 
-    // 🔥 FIX: always convert to Buffer
-    let buffer;
-    if (Buffer.isBuffer(req.body)) {
-      buffer = req.body;
-    } else if (req.body instanceof Uint8Array) {
-      buffer = Buffer.from(req.body);
-    } else {
-      buffer = Buffer.from([]);
-    }
-
-    fs.writeFileSync(path.join(dir, index), buffer);
+    // 🔥 अब body हमेशा buffer होगा
+    fs.writeFileSync(path.join(dir, index), req.body);
 
     res.json({ status: "chunk ok" });
 
@@ -69,59 +60,59 @@ app.post("/merge", async (req, res) => {
   const uploadDir = path.join(__dirname, "uploads", filename);
   const finalPath = path.join(__dirname, filename);
 
-  const writeStream = fs.createWriteStream(finalPath);
+  try {
+    const writeStream = fs.createWriteStream(finalPath);
 
-  for (let i = 0; i < totalChunks; i++) {
-    const chunkPath = path.join(uploadDir, i.toString());
+    for (let i = 0; i < totalChunks; i++) {
+      const chunkPath = path.join(uploadDir, i.toString());
 
-    if (!fs.existsSync(chunkPath)) {
-      console.log("Missing chunk:", i);
-      continue;
+      if (!fs.existsSync(chunkPath)) continue;
+
+      writeStream.write(fs.readFileSync(chunkPath));
     }
 
-    writeStream.write(fs.readFileSync(chunkPath));
-  }
+    writeStream.end();
 
-  writeStream.end();
+    // 🔥 wait for finish
+    await new Promise(resolve => writeStream.on("finish", resolve));
 
-  writeStream.on("finish", async () => {
+    // 🔥 check size
+    const stats = fs.statSync(finalPath);
+    if (stats.size === 0) {
+      throw new Error("Final file is empty");
+    }
+
+    console.log("Final file size:", stats.size);
+
+    // 📤 Telegram
+    const form = new FormData();
+    form.append("chat_id", CHAT_ID);
+    form.append("document", fs.createReadStream(finalPath));
+
+    const tg = await axios.post(
+      `https://api.telegram.org/bot${BOT_TOKEN}/sendDocument`,
+      form,
+      { headers: form.getHeaders() }
+    );
+
+    res.json({
+      status: "success",
+      file_id: tg.data.result.document.file_id
+    });
+
+  } catch (err) {
+    console.log("MERGE ERROR:", err.message);
+
+    res.status(500).json({ error: err.message });
+
+  } finally {
     try {
-      console.log("Uploading to Telegram...");
-
-      const form = new FormData();
-      form.append("chat_id", CHAT_ID);
-      form.append("document", fs.createReadStream(finalPath));
-
-      const tg = await axios.post(
-        `https://api.telegram.org/bot${BOT_TOKEN}/sendDocument`,
-        form,
-        { headers: form.getHeaders() }
-      );
-
-      res.json({
-        status: "success",
-        file_id: tg.data.result.document.file_id
-      });
-
-    } catch (err) {
-      console.log("Telegram error:", err.response?.data || err.message);
-
-      res.status(500).json({
-        error: err.response?.data?.description || err.message
-      });
-
-    } finally {
-      // 🧹 cleanup
-      try {
-        if (fs.existsSync(finalPath)) fs.unlinkSync(finalPath);
-        if (fs.existsSync(uploadDir)) {
-          fs.rmSync(uploadDir, { recursive: true, force: true });
-        }
-      } catch (e) {
-        console.log("Delete error:", e.message);
+      if (fs.existsSync(finalPath)) fs.unlinkSync(finalPath);
+      if (fs.existsSync(uploadDir)) {
+        fs.rmSync(uploadDir, { recursive: true, force: true });
       }
-    }
-  });
+    } catch {}
+  }
 });
 
 // Root
