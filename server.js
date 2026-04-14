@@ -11,8 +11,11 @@ const app = express();
 app.use(cors());
 app.options("*", cors());
 
-// ✅ stable raw parser
-app.use(express.raw({ limit: "200mb", type: "*/*" }));
+// ✅ RAW parser (important)
+app.use(express.raw({
+  limit: "200mb",
+  type: "*/*"
+}));
 
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const CHAT_ID = process.env.CHAT_ID;
@@ -27,21 +30,28 @@ app.post("/upload-chunk", (req, res) => {
       return res.status(400).json({ error: "Missing params" });
     }
 
-    // 🔥 SAFE NAME (important fix)
+    // 🔥 safe filename
     fileName = fileName.replace(/[^a-zA-Z0-9.]/g, "_");
 
     const dir = path.join(__dirname, "uploads", fileName);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 
-    if (!fs.existsSync(dir)) {
-      fs.mkdirSync(dir, { recursive: true });
+    // 🔥 FIX: always convert to Buffer
+    let buffer;
+    if (Buffer.isBuffer(req.body)) {
+      buffer = req.body;
+    } else if (req.body instanceof Uint8Array) {
+      buffer = Buffer.from(req.body);
+    } else {
+      buffer = Buffer.from([]);
     }
 
-    fs.writeFileSync(path.join(dir, index), req.body);
+    fs.writeFileSync(path.join(dir, index), buffer);
 
     res.json({ status: "chunk ok" });
 
   } catch (err) {
-    console.log("REAL ERROR:", err);
+    console.log("UPLOAD ERROR:", err);
     res.status(500).json({ error: err.message });
   }
 });
