@@ -7,7 +7,6 @@ const cors = require("cors");
 
 const app = express();
 
-// 🔥 CORS FIX
 app.use(cors());
 app.options("*", cors());
 
@@ -42,6 +41,10 @@ app.post("/upload-chunk", (req, res) => {
 // 🔗 Merge + Telegram
 app.post("/merge", async (req, res) => {
   const { filename, totalChunks } = req.query;
+
+  if (!filename || !totalChunks) {
+    return res.status(400).json({ error: "Missing params" });
+  }
 
   const uploadDir = path.join(__dirname, "uploads", filename);
   const finalPath = path.join(__dirname, filename);
@@ -86,7 +89,7 @@ app.post("/merge", async (req, res) => {
       });
 
     } finally {
-      // delete files
+      // 🧹 delete temp files
       try {
         if (fs.existsSync(finalPath)) fs.unlinkSync(finalPath);
         if (fs.existsSync(uploadDir)) {
@@ -97,8 +100,9 @@ app.post("/merge", async (req, res) => {
   });
 });
 
+// Root
 app.get("/", (req, res) => {
-  res.send("Server running 🚀");
+  res.send("✅ Server running");
 });
 
 app.listen(3000, () => console.log("Server running 🚀"));
